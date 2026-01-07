@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>3D Voice Recorder Pro</title>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { 
+            background: #000; color: #fff; 
+            font-family: sans-serif; height: 100vh;
+            display: flex; flex-direction: column; overflow: hidden;
+        }
+
+        /* 3D Viewport */
+        #canvas-box { flex: 1; width: 100%; position: relative; }
+
+        /* UI Panel */
+        .ui-panel { 
+            height: 55%; background: #111; 
+            border-top: 2px solid #333; padding: 15px;
+            display: flex; flex-direction: column;
+            border-radius: 25px 25px 0 0;
+        }
+
+        /* Voice Scale */
+        .scale-container {
+            width: 100%; height: 6px; background: #222;
+            margin-bottom: 10px; border-radius: 3px; overflow: hidden;
+        }
+        #scale-fill {
+            width: 0%; height: 100%; background: #00ffcc;
+            box-shadow: 0 0 10px #00ffcc; transition: width 0.05s linear;
+        }
+
+        /* Main Content Area: Script on Left, Buttons on Right */
+        .main-controls {
+            display: flex; flex: 1; gap: 15px; margin-bottom: 10px;
+        }
+
+        textarea {
+            flex: 2; background: #1a1a1a; color: #00ffcc;
+            border: 1px solid #444; border-radius: 12px;
+            padding: 12px; font-size: 15px; outline: none; resize: none;
+        }
+
+        /* Right Side Button Column */
+        .button-column {
+            flex: 1; display: flex; flex-direction: column; justify-content: flex-end;
+        }
+
+        button {
+            width: 100%; aspect-ratio: 1/1; border-radius: 50%;
+            border: none; font-weight: bold; font-size: 12px;
+            text-transform: uppercase; cursor: pointer;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+        }
+        
+        #startBtn { background: #ff3e3e; color: white; }
+        #stopBtn { background: #fff; color: #000; display: none; }
+
+        #playback-container { height: 40px; }
+        audio { width: 100%; filter: invert(1); height: 30px; }
+    </style>
+</head>
+<body>
+
+    <div id="canvas-box"></div>
+
+    <div class="ui-panel">
+        <div class="scale-container"><div id="scale-fill"></div></div>
+
+        <div class="main-controls">
+            <textarea id="script" placeholder="এখানে স্ক্রিপ্ট লিখুন..."></textarea>
+            
+            <div class="button-column">
+                <button id="startBtn">🔴 REC</button>
+                <button id="stopBtn">⏹️ STOP</button>
+            </div>
+        </div>
+
+        <div id="playback-container"></div>
+    </div>
+
+<script>
+    let scene, camera, renderer, controls, sphere, analyser, dataArray, stream, mediaRecorder;
+    let chunks = [];
+
+    function init3D() {
+        scene = new THREE.Scene();
+        const container = document.getElementById('canvas-box');
+        camera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.1, 1000);
+        camera.position.z = 4;
+
+        renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(container.clientWidth, container.clientHeight);
+        container.appendChild(renderer.domElement);
+
+        controls = new THREE.OrbitControls(camera, renderer.domElement);
+        
+        const geometry = new THREE.SphereGeometry(1.5, 32, 32);
+        const material = new THREE.MeshNormalMaterial({ wireframe: true });
+        sphere = new THREE.Mesh(geometry, material);
+        scene.add(sphere);
+
+        animate();
+    }
+
+    function animate() {
+        requestAnimationFrame(animate);
+        sphere.rotation.y += 0.005;
+        if (analyser) {
+            analyser.getByteFrequencyData(dataArray);
+            let avg = dataArray.reduce((a, b) => a + b) / dataArray.length;
+            let s = 1 + (avg / 60);
+            sphere.scale.set(s, s, s);
+            document.getElementById('scale-fill').style.width = Math.min(avg * 2, 100) + "%";
+        }
+        controls.update();
+        renderer.render(scene, camera);
+    }
+
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+
+    startBtn.onclick = async () => {
+        try {
+            stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const source = audioCtx.createMediaStreamSource(stream);
+            analyser = audioCtx.createAnalyser();
+            analyser.fftSize = 64;
+            dataArray = new Uint8Array(analyser.frequencyBinCount);
+            source.connect(analyser);
+
+            mediaRecorder = new MediaRecorder(stream);
+            chunks = [];
+            mediaRecorder.ondataavailable = e => chunks.push(e.data);
+            mediaRecorder.onstop = exportAudio;
+            
+            mediaRecorder.start();
+            startBtn.style.display = 'none';
+            stopBtn.style.display = 'block';
+        } catch (e) { alert("Microphone Error!"); }
+    };
+
+    stopBtn.onclick = () => {
+        mediaRecorder.stop();
+        stream.getTracks().forEach(track => track.stop());
+        startBtn.style.display = 'block';
+        stopBtn.style.display = 'none';
+    };
+
+    function exportAudio() {
+        const blob = new Blob(chunks, { type: 'audio/mp3' });
+        const url = URL.createObjectURL(blob);
+        const audio = document.createElement('audio');
+        audio.controls = true; audio.src = url;
+        document.getElementById('playback-container').innerHTML = "";
+        document.getElementById('playback-container').appendChild(audio);
+        
+        const a = document.createElement('a');
+        a.href = url; a.download = `voice_${Date.now()}.mp3`;
+        a.click();
+    }
+
+    init3D();
+</script>
+</body>
+</html>
